@@ -21,8 +21,8 @@ const PADDLE_PADDING: f32 = 10.0;
 // We set the z-value of the ball to 1 so it renders on top in the case of overlapping sprites.
 const BALL_STARTING_POSITION: Vec3 = Vec3::new(0.0, -50.0, 1.0);
 const BALL_SIZE: Vec3 = Vec3::new(30.0, 30.0, 0.0);
-const BALL_SPEED: f32 = 400.0;
-const INITIAL_BALL_DIRECTION: Vec2 = Vec2::new(0.5, -0.5);
+const BALL_SPEED: f32 = 100.0;
+const INITIAL_BALL_DIRECTION: Vec2 = Vec2::new(-1.0, 0.0);
 
 const WALL_THICKNESS: f32 = 10.0;
 // x coordinates
@@ -32,7 +32,7 @@ const RIGHT_WALL: f32 = 450.;
 const BOTTOM_WALL: f32 = -300.;
 const TOP_WALL: f32 = 300.;
 
-const BRICK_SIZE: Vec2 = Vec2::new(100., 30.);
+const BRICK_SIZE: Vec2 = Vec2::new(10., 10.);
 // These values are exact
 const GAP_BETWEEN_PADDLE_AND_BRICKS: f32 = 270.0;
 const GAP_BETWEEN_BRICKS: f32 = 5.0;
@@ -43,7 +43,7 @@ const GAP_BETWEEN_BRICKS_AND_SIDES: f32 = 20.0;
 const SCOREBOARD_FONT_SIZE: f32 = 40.0;
 const SCOREBOARD_TEXT_PADDING: Val = Val::Px(5.0);
 
-const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+const BACKGROUND_COLOR: Color = Color::rgb(0.1, 0.1, 0.1);
 const PACMAN_COLOR: Color = Color::rgb(0.3, 0.3, 0.7);
 const BALL_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
 const BRICK_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
@@ -63,6 +63,7 @@ fn main() {
                 .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
                 .with_system(check_for_collisions)
                 .with_system(move_pacman.before(check_for_collisions))
+                .with_system(move_pacman_input.before(apply_velocity))
                 .with_system(apply_velocity.before(check_for_collisions))
                 .with_system(play_collision_sound.after(check_for_collisions)),
         )
@@ -205,11 +206,21 @@ fn setup(
     ));
 
     // Ball
+    let texture: Handle<Image> = asset_server.load("pacman1.png");
     commands.spawn((
-        MaterialMesh2dBundle {
+        /*MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::default().into()).into(),
             material: materials.add(ColorMaterial::from(BALL_COLOR)),
             transform: Transform::from_translation(BALL_STARTING_POSITION).with_scale(BALL_SIZE),
+            ..default()
+        },*/
+        SpriteBundle {
+            transform: Transform::from_translation(BALL_STARTING_POSITION).with_scale(BALL_SIZE),
+            texture: texture,
+            sprite: Sprite{
+                custom_size: Some(Vec2::new(1.0,1.0)),
+                ..default()
+            },
             ..default()
         },
         Ball,
@@ -345,6 +356,33 @@ fn move_pacman(
     paddle_transform.translation.y = new_paddle_y_position.clamp(bottom_bound, up_bound);
 }
 
+fn move_pacman_input(
+    keyboard_input: Res<Input<KeyCode>>,
+    mut query: Query<(&mut Velocity, &mut Transform), With<Ball>>,
+) {
+    let (mut ball_velocity, mut ball_transform) = query.single_mut();
+    if keyboard_input.pressed(KeyCode::Left) {
+        ball_velocity.x = -BALL_SPEED;
+        ball_velocity.y = 0.0;
+        ball_transform.rotation=Quat::from_rotation_z(0.0_f32.to_radians());
+    } else if keyboard_input.pressed(KeyCode::Down) {
+        ball_velocity.x = 0.0;
+        ball_velocity.y = -BALL_SPEED;
+        ball_transform.rotation=Quat::from_rotation_z(90.0_f32.to_radians());
+    } else if keyboard_input.pressed(KeyCode::Up) {
+        ball_velocity.x = 0.0;
+        ball_velocity.y = BALL_SPEED;
+        ball_transform.rotation=Quat::from_rotation_z(-90.0_f32.to_radians());
+    } else if keyboard_input.pressed(KeyCode::Right) {
+        ball_velocity.x = BALL_SPEED;
+        ball_velocity.y = 0.0;
+        ball_transform.rotation=Quat::from_rotation_z(180.0_f32.to_radians());
+    } else {
+        ball_velocity.x = ball_velocity.x;
+        ball_velocity.y = ball_velocity.y;
+    };
+}
+
 fn apply_velocity(mut query: Query<(&mut Transform, &Velocity)>) {
     for (mut transform, velocity) in &mut query {
         transform.translation.x += velocity.x * TIME_STEP;
@@ -383,7 +421,7 @@ fn check_for_collisions(
             if maybe_brick.is_some() {
                 scoreboard.score += 1;
                 commands.entity(collider_entity).despawn();
-            }
+            }else{
 
             // reflect the ball when it collides
             let mut reflect_x = false;
@@ -401,13 +439,14 @@ fn check_for_collisions(
 
             // reflect velocity on the x-axis if we hit something on the x-axis
             if reflect_x {
-                ball_velocity.x = -ball_velocity.x;
+                ball_velocity.x = 0.0;
             }
 
             // reflect velocity on the y-axis if we hit something on the y-axis
             if reflect_y {
-                ball_velocity.y = -ball_velocity.y;
+                ball_velocity.y = 0.0;
             }
+        }
         }
     }
 }
