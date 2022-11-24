@@ -1,11 +1,5 @@
-//! A simplified implementation of the classic game "Breakout".
-
-use bevy::{
-    prelude::*,
-    sprite::collide_aabb::{collide, Collision},
-    sprite::MaterialMesh2dBundle,
-    time::FixedTimestep,
-};
+use bevy::{prelude::*, sprite::collide_aabb::collide, time::FixedTimestep};
+use rand::Rng;
 
 // Defines the amount of time that should elapse between each physics step.
 const TIME_STEP: f32 = 1.0 / 60.0;
@@ -13,16 +7,10 @@ const TIME_STEP: f32 = 1.0 / 60.0;
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 const PACMAN_SIZE: Vec3 = Vec3::new(60.0, 60.0, 0.0);
-const GAP_BETWEEN_PADDLE_AND_FLOOR: f32 = 60.0;
+const GAP_BETWEEN_PACMAN_AND_FLOOR: f32 = 60.0;
 const PACMAN_SPEED: f32 = 500.0;
-// How close can the paddle get to the wall
-const PADDLE_PADDING: f32 = 10.0;
-
-// We set the z-value of the ball to 1 so it renders on top in the case of overlapping sprites.
-const BALL_STARTING_POSITION: Vec3 = Vec3::new(0.0, -50.0, 1.0);
-const BALL_SIZE: Vec3 = Vec3::new(30.0, 30.0, 0.0);
-const BALL_SPEED: f32 = 400.0;
-const INITIAL_BALL_DIRECTION: Vec2 = Vec2::new(0.5, -0.5);
+// How close can the pacman get to the wall
+const PACMAN_PADDING: f32 = 10.0;
 
 const WALL_THICKNESS: f32 = 10.0;
 // x coordinates
@@ -32,24 +20,18 @@ const RIGHT_WALL: f32 = 450.;
 const BOTTOM_WALL: f32 = -300.;
 const TOP_WALL: f32 = 300.;
 
-const BRICK_SIZE: Vec2 = Vec2::new(100., 30.);
-// These values are exact
-const GAP_BETWEEN_PADDLE_AND_BRICKS: f32 = 270.0;
-const GAP_BETWEEN_BRICKS: f32 = 5.0;
-// These values are lower bounds, as the number of bricks is computed
-const GAP_BETWEEN_BRICKS_AND_CEILING: f32 = 20.0;
-const GAP_BETWEEN_BRICKS_AND_SIDES: f32 = 20.0;
-
 const SCOREBOARD_FONT_SIZE: f32 = 40.0;
 const SCOREBOARD_TEXT_PADDING: Val = Val::Px(5.0);
 
 const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
 const PACMAN_COLOR: Color = Color::rgb(0.3, 0.3, 0.7);
-const BALL_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
-const BRICK_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 const WALL_COLOR: Color = Color::rgb(0.8, 0.8, 0.8);
 const TEXT_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 const SCORE_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
+
+const ENEMY_SPAWN_STEP: f64 = 1.0; //seconds
+const ENEMY_COLOR: Color = Color::rgb(1.0, 1.0, 0.5);
+const ENEMY_SIZE: Vec2 = Vec2::new(30.0, 30.0);
 
 fn main() {
     App::new()
@@ -66,16 +48,18 @@ fn main() {
                 .with_system(apply_velocity.before(check_for_collisions))
                 .with_system(play_collision_sound.after(check_for_collisions)),
         )
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(FixedTimestep::step(ENEMY_SPAWN_STEP as f64))
+                .with_system(spawn_enemy),
+        )
         .add_system(update_scoreboard)
         .add_system(bevy::window::close_on_esc)
         .run();
 }
 
 #[derive(Component)]
-struct Paddle;
-
-#[derive(Component)]
-struct Ball;
+struct Pacman;
 
 #[derive(Component, Deref, DerefMut)]
 struct Velocity(Vec2);
@@ -87,7 +71,7 @@ struct Collider;
 struct CollisionEvent;
 
 #[derive(Component)]
-struct Brick;
+struct Enemy;
 
 #[derive(Resource)]
 struct CollisionSound(Handle<AudioSource>);
@@ -171,26 +155,21 @@ struct Scoreboard {
 }
 
 // Add the game's entities to our world
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    asset_server: Res<AssetServer>,
-) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Camera
     commands.spawn(Camera2dBundle::default());
 
     // Sound
-    let ball_collision_sound = asset_server.load("sounds/breakout_collision.ogg");
-    commands.insert_resource(CollisionSound(ball_collision_sound));
+    let pacman_collision_sound = asset_server.load("sounds/breakout_collision.ogg");
+    commands.insert_resource(CollisionSound(pacman_collision_sound));
 
-    // Paddle
-    let paddle_y = BOTTOM_WALL + GAP_BETWEEN_PADDLE_AND_FLOOR;
+    // Pacman
+    let pacman_y = BOTTOM_WALL + GAP_BETWEEN_PACMAN_AND_FLOOR;
 
     commands.spawn((
         SpriteBundle {
             transform: Transform {
-                translation: Vec3::new(0.0, paddle_y, 0.0),
+                translation: Vec3::new(0.0, pacman_y, 0.0),
                 scale: PACMAN_SIZE,
                 ..default()
             },
@@ -200,20 +179,8 @@ fn setup(
             },
             ..default()
         },
-        Paddle,
+        Pacman,
         Collider,
-    ));
-
-    // Ball
-    commands.spawn((
-        MaterialMesh2dBundle {
-            mesh: meshes.add(shape::Circle::default().into()).into(),
-            material: materials.add(ColorMaterial::from(BALL_COLOR)),
-            transform: Transform::from_translation(BALL_STARTING_POSITION).with_scale(BALL_SIZE),
-            ..default()
-        },
-        Ball,
-        Velocity(INITIAL_BALL_DIRECTION.normalize() * BALL_SPEED),
     ));
 
     // Scoreboard
@@ -249,72 +216,36 @@ fn setup(
     commands.spawn(WallBundle::new(WallLocation::Right));
     commands.spawn(WallBundle::new(WallLocation::Bottom));
     commands.spawn(WallBundle::new(WallLocation::Top));
+}
 
-    // Bricks
-    // Negative scales result in flipped sprites / meshes,
-    // which is definitely not what we want here
-    assert!(BRICK_SIZE.x > 0.0);
-    assert!(BRICK_SIZE.y > 0.0);
-
-    let total_width_of_bricks = (RIGHT_WALL - LEFT_WALL) - 2. * GAP_BETWEEN_BRICKS_AND_SIDES;
-    let bottom_edge_of_bricks = paddle_y + GAP_BETWEEN_PADDLE_AND_BRICKS;
-    let total_height_of_bricks = TOP_WALL - bottom_edge_of_bricks - GAP_BETWEEN_BRICKS_AND_CEILING;
-
-    assert!(total_width_of_bricks > 0.0);
-    assert!(total_height_of_bricks > 0.0);
-
-    // Given the space available, compute how many rows and columns of bricks we can fit
-    let n_columns = (total_width_of_bricks / (BRICK_SIZE.x + GAP_BETWEEN_BRICKS)).floor() as usize;
-    let n_rows = (total_height_of_bricks / (BRICK_SIZE.y + GAP_BETWEEN_BRICKS)).floor() as usize;
-    let n_vertical_gaps = n_columns - 1;
-
-    // Because we need to round the number of columns,
-    // the space on the top and sides of the bricks only captures a lower bound, not an exact value
-    let center_of_bricks = (LEFT_WALL + RIGHT_WALL) / 2.0;
-    let left_edge_of_bricks = center_of_bricks
-        // Space taken up by the bricks
-        - (n_columns as f32 / 2.0 * BRICK_SIZE.x)
-        // Space taken up by the gaps
-        - n_vertical_gaps as f32 / 2.0 * GAP_BETWEEN_BRICKS;
-
-    // In Bevy, the `translation` of an entity describes the center point,
-    // not its bottom-left corner
-    let offset_x = left_edge_of_bricks + BRICK_SIZE.x / 2.;
-    let offset_y = bottom_edge_of_bricks + BRICK_SIZE.y / 2.;
-
-    for row in 0..n_rows {
-        for column in 0..n_columns {
-            let brick_position = Vec2::new(
-                offset_x + column as f32 * (BRICK_SIZE.x + GAP_BETWEEN_BRICKS),
-                offset_y + row as f32 * (BRICK_SIZE.y + GAP_BETWEEN_BRICKS),
-            );
-
-            // brick
-            commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: BRICK_COLOR,
-                        ..default()
-                    },
-                    transform: Transform {
-                        translation: brick_position.extend(0.0),
-                        scale: Vec3::new(BRICK_SIZE.x, BRICK_SIZE.y, 1.0),
-                        ..default()
-                    },
-                    ..default()
-                },
-                Brick,
-                Collider,
-            ));
-        }
-    }
+fn spawn_enemy(mut commands: Commands) {
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: ENEMY_COLOR,
+                ..default()
+            },
+            transform: Transform {
+                translation: Vec2 {
+                    x: rand::thread_rng().gen_range(LEFT_WALL..RIGHT_WALL),
+                    y: rand::thread_rng().gen_range(BOTTOM_WALL..TOP_WALL),
+                }
+                .extend(0.0),
+                scale: ENEMY_SIZE.extend(1.0),
+                ..default()
+            },
+            ..default()
+        },
+        Enemy,
+        Collider,
+    ));
 }
 
 fn move_pacman(
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<&mut Transform, With<Paddle>>,
+    mut query: Query<&mut Transform, With<Pacman>>,
 ) {
-    let mut paddle_transform = query.single_mut();
+    let mut pacman_transform = query.single_mut();
 
     let x_direction = if keyboard_input.pressed(KeyCode::Left) {
         -1.0
@@ -331,18 +262,18 @@ fn move_pacman(
         0.0
     };
 
-    let new_paddle_x_position =
-        paddle_transform.translation.x + x_direction * PACMAN_SPEED * TIME_STEP;
-    let new_paddle_y_position =
-        paddle_transform.translation.y + y_direction * PACMAN_SPEED * TIME_STEP;
+    let new_pacan_x_position =
+        pacman_transform.translation.x + x_direction * PACMAN_SPEED * TIME_STEP;
+    let new_pacman_y_position =
+        pacman_transform.translation.y + y_direction * PACMAN_SPEED * TIME_STEP;
 
-    let left_bound = LEFT_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.x / 2.0 + PADDLE_PADDING;
-    let right_bound = RIGHT_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.x / 2.0 - PADDLE_PADDING;
-    let up_bound = TOP_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.y / 2.0 + PADDLE_PADDING;
-    let bottom_bound = BOTTOM_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.y / 2.0 - PADDLE_PADDING;
+    let left_bound = LEFT_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.x / 2.0 + PACMAN_PADDING;
+    let right_bound = RIGHT_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.x / 2.0 - PACMAN_PADDING;
+    let up_bound = TOP_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.y / 2.0 + PACMAN_PADDING;
+    let bottom_bound = BOTTOM_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.y / 2.0 - PACMAN_PADDING;
 
-    paddle_transform.translation.x = new_paddle_x_position.clamp(left_bound, right_bound);
-    paddle_transform.translation.y = new_paddle_y_position.clamp(bottom_bound, up_bound);
+    pacman_transform.translation.x = new_pacan_x_position.clamp(left_bound, right_bound);
+    pacman_transform.translation.y = new_pacman_y_position.clamp(bottom_bound, up_bound);
 }
 
 fn apply_velocity(mut query: Query<(&mut Transform, &Velocity)>) {
@@ -360,53 +291,29 @@ fn update_scoreboard(scoreboard: Res<Scoreboard>, mut query: Query<&mut Text>) {
 fn check_for_collisions(
     mut commands: Commands,
     mut scoreboard: ResMut<Scoreboard>,
-    mut ball_query: Query<(&mut Velocity, &Transform), With<Ball>>,
-    collider_query: Query<(Entity, &Transform, Option<&Brick>), With<Collider>>,
+    pacman_query: Query<&Transform, With<Pacman>>,
+    collider_query: Query<(Entity, &Transform, Option<&Enemy>), With<Collider>>,
     mut collision_events: EventWriter<CollisionEvent>,
 ) {
-    let (mut ball_velocity, ball_transform) = ball_query.single_mut();
-    let ball_size = ball_transform.scale.truncate();
+    let pacman_transform = pacman_query.single();
+    let pacman_size = pacman_transform.scale.truncate();
 
     // check collision with walls
-    for (collider_entity, transform, maybe_brick) in &collider_query {
+    for (collider_entity, transform, maybe_enemy) in &collider_query {
         let collision = collide(
-            ball_transform.translation,
-            ball_size,
+            pacman_transform.translation,
+            pacman_size,
             transform.translation,
             transform.scale.truncate(),
         );
-        if let Some(collision) = collision {
+        if collision.is_some() {
             // Sends a collision event so that other systems can react to the collision
             collision_events.send_default();
 
-            // Bricks should be despawned and increment the scoreboard on collision
-            if maybe_brick.is_some() {
+            // Enemy should be despawned and increment the scoreboard on collision
+            if maybe_enemy.is_some() {
                 scoreboard.score += 1;
                 commands.entity(collider_entity).despawn();
-            }
-
-            // reflect the ball when it collides
-            let mut reflect_x = false;
-            let mut reflect_y = false;
-
-            // only reflect if the ball's velocity is going in the opposite direction of the
-            // collision
-            match collision {
-                Collision::Left => reflect_x = ball_velocity.x > 0.0,
-                Collision::Right => reflect_x = ball_velocity.x < 0.0,
-                Collision::Top => reflect_y = ball_velocity.y < 0.0,
-                Collision::Bottom => reflect_y = ball_velocity.y > 0.0,
-                Collision::Inside => { /* do nothing */ }
-            }
-
-            // reflect velocity on the x-axis if we hit something on the x-axis
-            if reflect_x {
-                ball_velocity.x = -ball_velocity.x;
-            }
-
-            // reflect velocity on the y-axis if we hit something on the y-axis
-            if reflect_y {
-                ball_velocity.y = -ball_velocity.y;
             }
         }
     }
