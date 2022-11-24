@@ -7,10 +7,8 @@ const TIME_STEP: f32 = 1.0 / 60.0;
 // These constants are defined in `Transform` units.
 // Using the default 2D camera they correspond 1:1 with screen pixels.
 const PACMAN_SIZE: Vec3 = Vec3::new(60.0, 60.0, 0.0);
-const GAP_BETWEEN_PACMAN_AND_FLOOR: f32 = 60.0;
 const PACMAN_SPEED: f32 = 500.0;
-// How close can the pacman get to the wall
-const PACMAN_PADDING: f32 = 10.0;
+const INITIAL_PACMAN_DIRECTION: Vec2 = Vec2::new(-1.0, 0.);
 
 const WALL_THICKNESS: f32 = 10.0;
 // x coordinates
@@ -23,8 +21,7 @@ const TOP_WALL: f32 = 300.;
 const SCOREBOARD_FONT_SIZE: f32 = 40.0;
 const SCOREBOARD_TEXT_PADDING: Val = Val::Px(5.0);
 
-const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
-const PACMAN_COLOR: Color = Color::rgb(0.3, 0.3, 0.7);
+const BACKGROUND_COLOR: Color = Color::rgb(0.1, 0.1, 0.1);
 const WALL_COLOR: Color = Color::rgb(0.8, 0.8, 0.8);
 const TEXT_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 const SCORE_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
@@ -42,16 +39,16 @@ fn main() {
         .add_event::<CollisionEvent>()
         .add_system_set(
             SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
-                .with_system(check_for_collisions)
-                .with_system(move_pacman.before(check_for_collisions))
-                .with_system(apply_velocity.before(check_for_collisions))
-                .with_system(play_collision_sound.after(check_for_collisions)),
+                .with_run_criteria(FixedTimestep::step(ENEMY_SPAWN_STEP as f64))
+                .with_system(spawn_enemy),
         )
         .add_system_set(
             SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(ENEMY_SPAWN_STEP as f64))
-                .with_system(spawn_enemy),
+                .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+                .with_system(check_for_collisions)
+                .with_system(move_pacman.before(apply_velocity))
+                .with_system(apply_velocity.before(check_for_collisions))
+                .with_system(play_collision_sound.after(check_for_collisions)),
         )
         .add_system(update_scoreboard)
         .add_system(bevy::window::close_on_esc)
@@ -164,22 +161,20 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(CollisionSound(pacman_collision_sound));
 
     // Pacman
-    let pacman_y = BOTTOM_WALL + GAP_BETWEEN_PACMAN_AND_FLOOR;
-
+    let texture: Handle<Image> = asset_server.load("pacman1.png");
     commands.spawn((
         SpriteBundle {
-            transform: Transform {
-                translation: Vec3::new(0.0, pacman_y, 0.0),
-                scale: PACMAN_SIZE,
-                ..default()
-            },
+            transform: Transform::from_translation(Vec2 { x: 0., y: 0. }.extend(0.))
+                .with_scale(PACMAN_SIZE),
             sprite: Sprite {
-                color: PACMAN_COLOR,
+                custom_size: Some(Vec2::new(1.0, 1.0)),
                 ..default()
             },
+            texture,
             ..default()
         },
         Pacman,
+        Velocity(INITIAL_PACMAN_DIRECTION.normalize() * PACMAN_SPEED),
         Collider,
     ));
 
@@ -243,37 +238,29 @@ fn spawn_enemy(mut commands: Commands) {
 
 fn move_pacman(
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<&mut Transform, With<Pacman>>,
+    mut query: Query<(&mut Velocity, &mut Transform), With<Pacman>>,
 ) {
-    let mut pacman_transform = query.single_mut();
+    let (mut pacman_velocity, mut pacman_transform) = query.single_mut();
 
-    let x_direction = if keyboard_input.pressed(KeyCode::Left) {
-        -1.0
+    if keyboard_input.pressed(KeyCode::Left) {
+        pacman_velocity.x = -PACMAN_SPEED;
+        pacman_velocity.y = 0.0;
+        pacman_transform.rotation = Quat::from_rotation_z(0.0_f32.to_radians());
     } else if keyboard_input.pressed(KeyCode::Right) {
-        1.0
-    } else {
-        0.0
-    };
-    let y_direction = if keyboard_input.pressed(KeyCode::Down) {
-        -1.0
+        pacman_velocity.x = PACMAN_SPEED;
+        pacman_velocity.y = 0.0;
+        pacman_transform.rotation = Quat::from_rotation_z(180.0_f32.to_radians());
+    } else if keyboard_input.pressed(KeyCode::Down) {
+        pacman_velocity.x = 0.0;
+        pacman_velocity.y = -PACMAN_SPEED;
+        pacman_transform.rotation = Quat::from_rotation_z(90.0_f32.to_radians());
     } else if keyboard_input.pressed(KeyCode::Up) {
-        1.0
+        pacman_velocity.x = 0.0;
+        pacman_velocity.y = PACMAN_SPEED;
+        pacman_transform.rotation = Quat::from_rotation_z(-90.0_f32.to_radians());
     } else {
-        0.0
+        // do nothing
     };
-
-    let new_pacan_x_position =
-        pacman_transform.translation.x + x_direction * PACMAN_SPEED * TIME_STEP;
-    let new_pacman_y_position =
-        pacman_transform.translation.y + y_direction * PACMAN_SPEED * TIME_STEP;
-
-    let left_bound = LEFT_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.x / 2.0 + PACMAN_PADDING;
-    let right_bound = RIGHT_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.x / 2.0 - PACMAN_PADDING;
-    let up_bound = TOP_WALL + WALL_THICKNESS / 2.0 + PACMAN_SIZE.y / 2.0 + PACMAN_PADDING;
-    let bottom_bound = BOTTOM_WALL - WALL_THICKNESS / 2.0 - PACMAN_SIZE.y / 2.0 - PACMAN_PADDING;
-
-    pacman_transform.translation.x = new_pacan_x_position.clamp(left_bound, right_bound);
-    pacman_transform.translation.y = new_pacman_y_position.clamp(bottom_bound, up_bound);
 }
 
 fn apply_velocity(mut query: Query<(&mut Transform, &Velocity)>) {
